@@ -47,23 +47,28 @@ public class AvroFileInputDriver extends Configured implements Tool {
             for (Text val : values) {
                 Map<String, String> map = mapper.readValue(val.toString(), Map.class);
                 for (Map.Entry<String, String> entry : map.entrySet()) {
-                        List<String> list = datas.get(entry.getKey());
-                        if (list == null) {
-                            list = new ArrayList<>();
-                            if (!isStringEmptyOrNull(entry.getValue())) {
-                                list.add(entry.getValue());
-                            }
-                            datas.put(entry.getKey(), list);
+                    List<String> list = datas.get(entry.getKey());
+                    if (list == null) {
+                        list = new ArrayList<>();
+                        if (!isStringEmptyOrNull(entry.getValue())) {
+                            list.add(entry.getValue());
                         } else {
-                            if (!list.contains(entry.getValue()) && !isStringEmptyOrNull(entry.getValue())) {
-                                list.add(entry.getValue());
-                            }
+                            list.add("");
                         }
+                        datas.put(entry.getKey(), list);
+                    } else {
+                        if (!list.contains(entry.getValue()) && !isStringEmptyOrNull(entry.getValue())) {
+                            if (list.size() == 1 && isStringEmptyOrNull(list.get(0))) {
+                                list.clear();
+                            }
+                            list.add(entry.getValue());
+                        }
+                    }
                 }
             }
             Collection<List<String>> lists = datas.values();
             Set<String> columns = datas.keySet();
-            Collection collection = shuffleData(columns, key.toString(), lists.toArray(new List[lists.size()]));
+            Collection collection = shuffleData(columns, key.toString(), context.getConfiguration().get("outDir"), lists.toArray(new List[lists.size()]));
             context.write(key, new IntWritable(collection.size()));
         }
     }
@@ -71,7 +76,7 @@ public class AvroFileInputDriver extends Configured implements Tool {
     public int run(String[] args) throws Exception {
         Configuration conf = new Configuration();
         conf.set("keyField", "EMPLOYEE_ID");
-
+        conf.set("outDir", args[1]);
 
         Job job = new Job(conf);
         job.setJarByClass(AvroFileInputDriver.class);
@@ -95,15 +100,9 @@ public class AvroFileInputDriver extends Configured implements Tool {
         return job.waitForCompletion(true) ? 0 : 1;
     }
 
-    private static Collection<List<String>> shuffleData(Set<String> columns, String id, List<String>... list) throws IOException {
+    private static Collection<List<String>> shuffleData(Set<String> columns, String id, String outFilePath, List<String>... list) throws IOException {
         System.out.println("Splitting row for id... " + id);
         Stream<Collection<String>> inputs = Stream.of(list);
-        System.out.println("Row size: " + list.length);
-
-        for (List<String> strings : list) {
-            System.out.println("strings = " + strings);
-        }
-
         Stream<Collection<List<String>>> listified = inputs.filter(Objects::nonNull)
                 .filter(input -> !input.isEmpty())
                 .map(l -> l.stream()
@@ -121,21 +120,17 @@ public class AvroFileInputDriver extends Configured implements Tool {
             return merged;
         }).orElse(new HashSet<>());
 
-
         System.out.println("Shuffle completed");
-//        writeDataIntoAvroFile(combinations, columns);
-        for (List<String> combination : combinations) {
-            System.out.println("Shuffle row size: "+combination);;
-        }
+        writeDataIntoAvroFile(combinations, columns, outFilePath);
         return combinations;
     }
 
-    private static void writeDataIntoAvroFile(Collection<List<String>> combinations, Set<String> columns) throws IOException {
+    private static void writeDataIntoAvroFile(Collection<List<String>> combinations, Set<String> columns, String outFilePath) throws IOException {
         Schema avroSchema = createAvroSchema(new ArrayList<>(columns));
         DatumWriter<GenericRecord> datumWriter = new GenericDatumWriter<>(avroSchema);
         DataFileWriter<GenericRecord> dataFileWriter = new DataFileWriter<>(datumWriter);
         try {
-            File avroFile = new File("/home/debashis/out/result.avro");
+            File avroFile = new File(outFilePath + "/result.avro");
             if (avroFile.exists()) {
                 dataFileWriter.appendTo(avroFile);
             } else {
